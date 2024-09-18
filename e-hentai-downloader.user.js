@@ -11996,6 +11996,7 @@ if (typeof module !== "undefined" && module.exports) {
 var zip;
 var imageList = [];
 var imageData = [];
+var infoObj;
 var infoStr;
 var origin = window.location.origin;
 var setting = null;
@@ -12047,6 +12048,7 @@ var ehDownloadRegex = {
 	IPBanExpires: /The ban expires in \d+ hours?( and \d+ minutes?)?/,
 	donatorPower: /<td>Donations<\/td><td.*>([+-]?[\d\.]+)<\/td>/,
 	postedTime: /<td.*?>Posted:<\/td><td.*?>(.*?)<\/td>/,
+	Language: /<td.*?>Language:<\/td><td.*?>([A-Za-z]+).*?<\/td>/,
 	categoryTag: /g\/c\/(\w+)\./,
 	slashOnly: /^[\\/]*$/,
 	originalImagePattern: /\/fullimg(?:\.php\?|\/)/
@@ -12367,6 +12369,11 @@ function isInPeakHours() {
 	return (day === 0 ? hour >= 5 : hour >= 14) && hour < 20;
 }
 
+function PostedTime() {
+	var galleryTime = (document.documentElement.innerHTML.match(ehDownloadRegex.postedTime) || [])[1];
+	return Date.parse(galleryTime + '+0000');
+}
+
 function isRecentGallery() {
 	// 2022-06-07
 	// A couple of minor tweaks to the "Download source image" changes, since it dropped the utilization by a lot more than we needed it to:
@@ -12375,18 +12382,14 @@ function isRecentGallery() {
 	// 2022-11-25
 	// - One of two new image servers that replace the current oldest image server is now live. (The second one will probably go live in about a month.)
 	// - Increased the cutoff for how old a gallery has to be before it charges GP for original file downloads during peak hours from 30 days to 90 days.
-	var galleryTime = (document.documentElement.innerHTML.match(ehDownloadRegex.postedTime) || [])[1];
-	var time = Date.parse(galleryTime + '+0000');
-	return Date.now() - time < 90 * 24 * 60 * 60 * 1000;
+	return Date.now() - PostedTime() < 90 * 24 * 60 * 60 * 1000;
 }
 
 function isAncientGallery() {
 	// 2023-07-07
 	// - Galleries posted more than 1 year ago now always require GP to use the "download original image" links. As before, galleries uploaded 3-12 months ago can still use this function with the image quota outside of peak hours, while galleries uploaded less than 3 months ago can do this even during peak hours.
 	// (This still doesn't apply to donators, whose image limits are tied to account rather than IP address and thus cannot be "refreshed" just by switching IP)
-	var galleryTime = (document.documentElement.innerHTML.match(ehDownloadRegex.postedTime) || [])[1];
-	var time = Date.parse(galleryTime + '+0000');
-	return Date.now() - time >= 365 * 24 * 60 * 60 * 1000;
+	return Date.now() - PostedTime() >= 365 * 24 * 60 * 60 * 1000;
 }
 
 function isDonator() {
@@ -12509,21 +12512,39 @@ function PageData(pageURL, imageURL, imageName, nextNL, realIndex, imageNumber) 
 
 // rename images that have the same name
 function renameImages() {
-	imageList.forEach(function(elem, index) {
-		// if Number Images are enabled, filename won't be changed, just numbering
-		if (!needNumberImages) {
-			for (var i = 0; i < index; i++) {
-				if (elem !== undefined && imageList[i] !== undefined && elem.imageName.toLowerCase() === imageList[i]['imageName'].toLowerCase()) {
-					var nameParts = elem.imageName.split('.');
-					nameParts[nameParts.length - 2] += ' (' + (++imageList[i].equalCount) + ')';
-					elem.imageName = nameParts.join('.');
-					break;
-				}
-			}
-		}
-		else elem['imageName'] = elem['imageNumber'] + (setting['number-separator'] ? setting['number-separator'] : '：') + elem['imageName'];
-	});
-}
+	function filterInt(value) {
+	  if (value.includes('.'))
+		value = value.slice(0, value.lastIndexOf('.'));
+	  if (/^(\-|\+)?([0-9]+|Infinity)$/.test(value)) return Number(value);
+	  throw new TypeError("Cannot convert to int.");
+	};
+	console.log(imageList);
+	let sorted_imageList = undefined;
+	try {
+	  sorted_imageList = imageList.toSorted((a, b) => filterInt(a.imageName) - filterInt(b.imageName));
+	  console.log('数字');
+	} catch {
+	  sorted_imageList = imageList.toSorted((a, b) => a.imageName < b.imageName ? -1 : 1);
+	}
+	console.log(sorted_imageList);
+	needNumberImages = imageList.some((a, index_a) => imageList.some((b, index_b) => (index_a !== index_b) && (a.imageName === b.imageName)));
+	needNumberImages ||= ! imageList.every((a, index) => a.imageName === sorted_imageList[index].imageName)
+	console.log(needNumberImages);
+	  imageList.forEach(function(elem, index) {
+		  // if Number Images are enabled, filename won't be changed, just numbering
+		  if (!needNumberImages) {
+			  for (var i = 0; i < index; i++) {
+				  if (elem !== undefined && imageList[i] !== undefined && elem.imageName.toLowerCase() === imageList[i]['imageName'].toLowerCase()) {
+					  var nameParts = elem.imageName.split('.');
+					  nameParts[nameParts.length - 2] += ' (' + (++imageList[i].equalCount) + ')';
+					  elem.imageName = nameParts.join('.');
+					  break;
+				  }
+			  }
+		  }
+		  else elem['imageName'] = elem['imageNumber'] + (setting['number-separator'] ? setting['number-separator'] : '：') + elem['imageName'];
+	  });
+  }
 
 // store responsed content from GM_xhr
 // Updated on 1.19: Now the index argument is the page's number - 1 (original is page's number)
@@ -12535,7 +12556,7 @@ function storeRes(res, index) {
 
 	updateTotalStatus();
 	if (!isPausing) checkFailed();
-	
+
 	res = null;
 }
 
@@ -12562,6 +12583,53 @@ function generateZip(isFromFS, fs, isRetry, forced){
 
 		if (setting['save-info'] === 'file' || !setting['save-info']) {
 			(dirName && !ehDownloadRegex.slashOnly.test(dirName) ? zip.folder(dirName) : zip).file('info.txt', infoStr.replace(/\n/gi, '\r\n'));
+		} else if (setting['save-info'] === 'comicinfo_xml') {
+			// https://anansi-project.github.io/docs/comicinfo/intro
+			const doc = document.implementation.createDocument("", "", null);
+			const ComicInfo = doc.createElement("ComicInfo");
+			function appendElement(field, value){
+				if (value === undefined) return;
+				const el = doc.createElement(field);
+				el.textContent = value;
+				ComicInfo.appendChild(el);
+			}
+			if (infoObj["SubTitle"]) // No consensus for element SubTitle in ComicInfo yet
+				appendElement("Title", infoObj["SubTitle"]);
+			else
+				appendElement("Title", infoObj["Title"]);
+			appendElement("Summary", infoObj["Uploader Comment"]);
+			const PosetedDate = new Date(PostedTime());
+			appendElement("Year", PosetedDate.getUTCFullYear());
+			appendElement("Month", PosetedDate.getUTCMonth());
+			appendElement("Day", PosetedDate.getUTCDay());
+			var artist = infoObj["Tags"].find(tag => tag.startsWith("artist:"));
+			if (artist !== undefined)
+				appendElement("Writer", artist.slice(7));
+			else {
+				artist = infoObj["Tags"].find(tag => tag.startsWith("艺术家："))
+				if (artist !== undefined)
+					appendElement("Writer", artist.slice(4));
+			}
+			appendElement("Publisher", infoObj["Uploader"]);
+			appendElement("Genre", infoObj["Category"]);
+			appendElement("Tags", infoObj["Tags"].join(","));
+			appendElement("Web", window.location.href);
+			const language = (document.documentElement.innerHTML.match(ehDownloadRegex.Language) || [])[1]; // use regex to avoid conflict with EhSyringe
+			if (language !== undefined) {
+				const LanguageCode = new Map([["Afrikaans", "af"], ["Albanian", "sq"], ["Arabic", "ar"], ["Aramaic", "arc"], ["Armenian", "hy"], ["Bengali", "bn"], ["Bosnian", "bs"], ["Bulgarian", "bg"], ["Burmese", "my"], ["Catalan", "ca"], ["Cebuano", "ceb"], ["Chinese", "zh"], ["Cree", "cr"], ["Croatian", "hr"], ["Czech", "cs"], ["Danish", "da"], ["Dutch", "nl"], ["English", "en"], ["Esperanto", "eo"], ["Estonian", "et"], ["Finnish", "fi"], ["French", "fr"], ["Georgian", "ka"], ["German", "de"], ["Greek", "el"], ["Gujarati", "gu"], ["Hebrew", "he"], ["Hindi", "hi"], ["Hmong", "hmn"], ["Hungarian", "hu"], ["Icelandic", "is"], ["Indonesian", "id"], ["Irish", "ga"], ["Italian", "it"], ["Japanese", "ja"], ["Javanese", "jv"], ["Kannada", "kn"], ["Kazakh", "kk"], ["Khmer", "km"], ["Korean", "ko"], ["Kurdish", "ku"], ["Ladino", "lad"], ["Lao", "lo"], ["Latin", "la"], ["Latvian", "lv"], ["Marathi", "mr"], ["Mongolian", "mn"], ["Nepali", "ne"], ["Norwegian", "no"], ["Oromo", "om"], ["Papiamento", "pap"], ["Pashto", "ps"], ["Persian", "fa"], ["Polish", "pl"], ["Portuguese", "pt"], ["Punjabi", "pa"], ["Romanian", "ro"], ["Russian", "ru"], ["Sango", "sg"], ["Sanskrit", "sa"], ["Serbian", "sr"], ["Shona", "sn"], ["Slovak", "sk"], ["Slovenian", "sl"], ["Somali", "so"], ["Spanish", "es"], ["Swahili", "sw"], ["Swedish", "sv"], ["Tagalog", "tl"], ["Tamil", "ta"], ["Telugu", "te"], ["Thai", "th"], ["Tibetan", "bo"], ["Tigrinya", "ti"], ["Turkish", "tr"], ["Ukrainian", "uk"], ["Urdu", "ur"], ["Vietnamese", "vi"], ["Welsh", "cy"], ["Yiddish", "yi"], ["Zulu", "zu"]]);
+				if (LanguageCode.has(language)) appendElement("LanguageISO", LanguageCode.get(language));
+			}
+			var characters = infoObj["Tags"].filter(tag => tag.startsWith("character:"));
+			if (characters.length != 0) {
+				appendElement("Characters", characters.map(tag => tag.slice(10)).join(','));
+			} else {
+				characters = infoObj["Tags"].filter(tag => tag.startsWith("角色："));
+				if (characters.length != 0) appendElement("Characters", characters.map(tag => tag.slice(3)).join(','));
+			}
+			appendElement("EHD_info", infoStr);
+			doc.appendChild(ComicInfo);
+			const serializer = new XMLSerializer();
+			zip.file('ComicInfo.xml', serializer.serializeToString(doc));  // ComicInfo.xml must be at top-level
 		}
 	}
 
@@ -13224,7 +13292,7 @@ function fetchOriginalImage(index, nodeList) {
 				if (byteLength === 28) { // 'An error has occurred. (403)' Length
 					console.log('[EHD] #' + (index + 1) + ': An error has occurred. (403)');
 					console.log('[EHD] #' + (index + 1) + ': RealIndex >', imageList[index]['realIndex'], ' | ReadyState >', res.readyState, ' | Status >', res.status, ' | StatusText >', res.statusText + '\nRequest URL >', requestURL, '\nFinal URL >', res.finalUrl, '\nResposeHeaders >' + res.responseHeaders);
-					
+
 					updateProgress(nodeList, {
 						status: 'Failed! (Error 403)',
 						progress: '0',
@@ -13436,7 +13504,7 @@ If you want to reset your limits by paying your GPs or credits right now, or exc
 						for (var i in res) {
 							delete res[i];
 						}
-						
+
 						if (setting['force-resized'] || confirm('Your account has been suspended.\n\n\
 							Your account is suspended by E-Hentai, and you can check your unblock time on E-Hentai forum. At this time, you cannot access to any user-related page and download original images.\n\
 							You can still access to resized images, would you like to switch to download resized images?')) {
@@ -13866,7 +13934,7 @@ function getAllPagesURL() {
 			pushDialog('Succeed!');
 
 			curPage++;
-			
+
 			if (!pagesLength) { // can't get pagesLength correctly before
 				pagesLength = responseText.match(ehDownloadRegex.pagesLength)[1] - 0;
 			}
@@ -13946,6 +14014,7 @@ function initEHDownload() {
 	isPausing = false;
 	zip = new JSZip();
 	infoStr = '';
+	infoObj = {};
 	fetchPagesXHR.abort();
 
 	if (setting['recheck-file-name']) {
@@ -13995,7 +14064,7 @@ function initEHDownload() {
 
 		// Chrome can use about 10% of free space of disk where Chrome User Data stored in as TEMPORARY File System Storage.
 		if (navigator.webkitTemporaryStorage) { // if support navigator.webkitTemporaryStorage to check usable space
-			// use `queryUsageAndQuota` instead of `requestQuota` to check storage space, 
+			// use `queryUsageAndQuota` instead of `requestQuota` to check storage space,
 			// because `requestQuota` is incorrect when harddisk is full, says have about 5GB storage
 			navigator.webkitTemporaryStorage.queryUsageAndQuota(function (usage, quota) {
 				console.log('[EHD] Free TEMPORARY File System Space >', quota - usage);
@@ -14026,6 +14095,8 @@ function initEHDownload() {
 	// Array.prototype.some() is a bit ugly, so we use toString().indexOf() lol
 	var infoNeeds = setting['save-info-list'].toString();
 	if (infoNeeds.indexOf('title') >= 0) {
+		infoObj["Title"] = document.getElementById('gn').textContent;
+		infoObj["SubTitle"] = document.getElementById('gj').textContent;
 		infoStr += replaceHTMLEntites(
 			document.getElementById('gn').textContent + '\n' +
 			document.getElementById('gj').textContent + '\n' +
@@ -14034,8 +14105,10 @@ function initEHDownload() {
 	}
 
 	if (infoNeeds.indexOf('metas') >= 0) {
-		infoStr += 'Category: ' + document.querySelector('#gdc .cs').textContent.trim() + '\n' +
-				   'Uploader: ' + replaceHTMLEntites(document.querySelector('#gdn').textContent) + '\n';
+		infoObj["Category"] = document.querySelector('#gdc .cs').textContent.trim()
+		infoObj["Uploader"] = replaceHTMLEntites(document.querySelector('#gdn').textContent)
+		infoStr += 'Category: ' + infoObj["Category"] + '\n' +
+				   'Uploader: ' + infoObj["Uploader"] + '\n';
 	}
 	var metaNodes = document.querySelectorAll('#gdd tr');
 	for (var i = 0; i < metaNodes.length; i++) {
@@ -14046,6 +14119,7 @@ function initEHDownload() {
 	if (infoNeeds.indexOf('metas') >= 0) infoStr += 'Rating: ' + unsafeWindow.average_rating + '\n\n';
 
 	if (infoNeeds.indexOf('tags') >= 0) {
+		infoObj["Tags"] = [];
 		infoStr += 'Tags:\n';
 
 		var tagsList = document.querySelectorAll('#taglist tr');
@@ -14054,6 +14128,9 @@ function initEHDownload() {
 			infoStr += '> ' + tds[0].textContent + ' ';
 
 			var tags = tds[1].querySelectorAll('a');
+			for (var tag of tags) {
+				infoObj["Tags"].push(tds[0].textContent + tag.textContent);
+			}
 			infoStr += Array.prototype.map.call(tags, function(e){
 				return e.textContent;
 			}).join(', ') + '\n';
@@ -14063,7 +14140,8 @@ function initEHDownload() {
 	}
 
 	if (infoNeeds.indexOf('uploader-comment') >= 0 && document.getElementById('comment_0')) {
-		infoStr += 'Uploader Comment:\n' + document.getElementById('comment_0').innerHTML.replace(/<br>|<br \/>/gi, '\n') + '\n\n';
+		infoObj["Uploader Comment"] = document.getElementById('comment_0').innerHTML.replace(/<br>|<br \/>/gi, '\n');
+		infoStr += 'Uploader Comment:\n' + infoObj["Uploader Comment"] + '\n\n';
 	}
 	isDownloading = true;
 	pushDialog(infoStr);
@@ -14083,7 +14161,7 @@ function initEHDownload() {
 
 function initVisibilityListener() {
 	var hidden, visibilityChange;
-	if (typeof document.hidden !== 'undefined') { // Opera 12.10 and Firefox 18 and later support 
+	if (typeof document.hidden !== 'undefined') { // Opera 12.10 and Firefox 18 and later support
 		hidden = 'hidden';
 		visibilityChange = 'visibilitychange';
 	}
@@ -14140,7 +14218,7 @@ function initProgressTable(){
 
 function requestDownload(ignoreFailed){
 	if (isPausing) return;
-	
+
 	if (setting['delay-request']) {
 		var curTime = Date.now();
 		if (delayTime < curTime) {
@@ -14321,7 +14399,7 @@ function getPageData(index) {
 		}
 
 		var imageNumber = '';
-		if (needNumberImages) {
+		if (true) {
 			// Number images, thanks to JingJang@GitHub, source: https://github.com/JingJang/E-Hentai-Downloader
 			if (!setting['number-real-index'] && pagesRange.length) { // if pages range was set and number original index is not required
 				var len = pagesRange.length.toString().length,
@@ -14348,7 +14426,7 @@ function getPageData(index) {
 			});
 			fetchCount--;
 			imageData[index] = null;
-			
+
 			updateTotalStatus();
 		}
 		else {
@@ -14468,7 +14546,7 @@ function showSettings() {
 					<div class="g2"><label><input type="checkbox" data-ehd-setting="never-warn-large-gallery"> Never show warning when downloading a large gallery (>= 300 MB) </label></div>\
 					<div class="g2"' + (requestFileSystem ? '' : ' style="opacity: 0.5;" title="Only Chrome supports this feature"') + '><label><input type="checkbox" data-ehd-setting="store-in-fs"> Use File System to handle large Zip file</label> <label>when gallery is larger than <input type="number" data-ehd-setting="fs-size" min="0" placeholder="200" style="width: 46px;"> MB (0 is always)</label><sup>(4)</sup></div>\
 					<div class="g2"><label><input type="checkbox" data-ehd-setting="play-silent-music"> Play silent music during the process to avoid downloading freeze </label><sup>(5)</sup></div>\
-					<div class="g2"><label>Record and save gallery info as <select data-ehd-setting="save-info"><option value="file">File info.txt</option><option value="comment">Zip comment</option><option value="none">None</option></select></label></div>\
+					<div class="g2"><label>Record and save gallery info as <select data-ehd-setting="save-info"><option value="file">File info.txt</option><option value="comment">Zip comment</option><option value="comicinfo_xml">File ComicInfo.xml</option><option value="none">None</option></select></label></div>\
 					<div class="g2">...which includes <label><input type="checkbox" data-ehd-setting="save-info-list[]" value="title">Title & Gallery Link</label> <label><input type="checkbox" data-ehd-setting="save-info-list[]" value="metas">Metadatas</label> <label><input type="checkbox" data-ehd-setting="save-info-list[]" value="tags">Tags</label> <label><input type="checkbox" data-ehd-setting="save-info-list[]" value="uploader-comment">Uploader Comment</label> <label><input type="checkbox" data-ehd-setting="save-info-list[]" value="page-links">Page Links</label></div>\
 					<div class="g2"><label><input type="checkbox" data-ehd-setting="replace-with-full-width"> Replace forbidden characters with full-width characters instead of dash (-)</label></div>\
 					<div class="g2"><label><input type="checkbox" data-ehd-setting="force-pause"> Force drop downloaded images data when pausing download</label></div>\
