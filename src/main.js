@@ -518,21 +518,39 @@ function PageData(pageURL, imageURL, imageName, nextNL, realIndex, imageNumber) 
 
 // rename images that have the same name
 function renameImages() {
-	imageList.forEach(function(elem, index) {
-		// if Number Images are enabled, filename won't be changed, just numbering
-		if (!needNumberImages) {
-			for (var i = 0; i < index; i++) {
-				if (elem !== undefined && imageList[i] !== undefined && elem.imageName.toLowerCase() === imageList[i]['imageName'].toLowerCase()) {
-					var nameParts = elem.imageName.split('.');
-					nameParts[nameParts.length - 2] += ' (' + (++imageList[i].equalCount) + ')';
-					elem.imageName = nameParts.join('.');
-					break;
-				}
-			}
-		}
-		else elem['imageName'] = elem['imageNumber'] + (setting['number-separator'] ? setting['number-separator'] : '：') + elem['imageName'];
-	});
-}
+	function filterInt(value) {
+	  if (value.includes('.'))
+		value = value.slice(0, value.lastIndexOf('.'));
+	  if (/^(\-|\+)?([0-9]+|Infinity)$/.test(value)) return Number(value);
+	  throw new TypeError("Cannot convert to int.");
+	};
+	console.log(imageList);
+	let sorted_imageList = undefined;
+	try {
+	  sorted_imageList = imageList.toSorted((a, b) => filterInt(a.imageName) - filterInt(b.imageName));
+	  console.log('数字');
+	} catch {
+	  sorted_imageList = imageList.toSorted((a, b) => a.imageName < b.imageName ? -1 : 1);
+	}
+	console.log(sorted_imageList);
+	needNumberImages = imageList.some((a, index_a) => imageList.some((b, index_b) => (index_a !== index_b) && (a.imageName === b.imageName)));
+	needNumberImages ||= ! imageList.every((a, index) => a.imageName === sorted_imageList[index].imageName)
+	console.log(needNumberImages);
+	  imageList.forEach(function(elem, index) {
+		  // if Number Images are enabled, filename won't be changed, just numbering
+		  if (!needNumberImages) {
+			  for (var i = 0; i < index; i++) {
+				  if (elem !== undefined && imageList[i] !== undefined && elem.imageName.toLowerCase() === imageList[i]['imageName'].toLowerCase()) {
+					  var nameParts = elem.imageName.split('.');
+					  nameParts[nameParts.length - 2] += ' (' + (++imageList[i].equalCount) + ')';
+					  elem.imageName = nameParts.join('.');
+					  break;
+				  }
+			  }
+		  }
+		  else elem['imageName'] = elem['imageNumber'] + (setting['number-separator'] ? setting['number-separator'] : '：') + elem['imageName'];
+	  });
+  }
 
 // store responsed content from GM_xhr
 // Updated on 1.19: Now the index argument is the page's number - 1 (original is page's number)
@@ -2387,7 +2405,7 @@ function getPageData(index) {
 		}
 
 		var imageNumber = '';
-		if (needNumberImages) {
+		if (true) {
 			// Number images, thanks to JingJang@GitHub, source: https://github.com/JingJang/E-Hentai-Downloader
 			if (!setting['number-real-index'] && pagesRange.length) { // if pages range was set and number original index is not required
 				var len = pagesRange.length.toString().length,
